@@ -91,7 +91,7 @@ class WavSet(torch_utils.Dataset):
         if self.print_dur:
             return (cur_wav, cur_lab, cur_utt, cur_dur)
         else:
-            return (cur_wav, cur_lab, cur_utt)
+            return (cur_wav, cur_lab, cur_utt) # wav discrete sample list, emo_dict, label
 
 def collate_fn_padd(batch):
     """
@@ -151,9 +151,9 @@ class DataManager:
             csv_reader = csv.reader(f)
             for row in csv_reader:
                 utt_id = row[0]
-                stype = row[-1]
+                stype = row[6] #-1
                 if stype == sid:
-                    utt_list.append(utt_id)
+                    utt_list.append(utt_id) # i-th wav data sample with utt_id
         utt_list.sort()
         return utt_list
 
@@ -162,6 +162,8 @@ class DataManager:
         emo_class_list = self.get_categorical_emo_class()
         with open(lbl_loc, 'r') as f:
             header = f.readline().split(",")
+            header = [col.strip() for col in header]
+            print(f"header: {header}")
             emo_idx_list = []
             for emo_class in emo_class_list:
                 emo_idx_list.append(header.index(emo_class))
@@ -170,7 +172,7 @@ class DataManager:
                 utt_id = row[0]
                 cur_emo_lab = []
                 for emo_idx in emo_idx_list:
-                    cur_emo_lab.append(float(row[emo_idx]))
+                    cur_emo_lab.append(float(row[emo_idx])) # emotion label distribution of utt_id-th sample
                 self.msp_label_dict[utt_id] = cur_emo_lab
 
     def get_msp_labels(self, utt_list, lab_type='categorical', lbl_loc=None):
@@ -202,21 +204,27 @@ def prepare_datasets(datarc, config_path):
         datarc['root'],
         datarc['corpus'],
         datarc['p_or_s'],
+        datarc['src'],
         "labels_consensus_" + datarc['test_fold'].replace("fold", "") + ".csv"
     )
-
+    print(f"total label_path: {label_path}")
     # 取得資料集的 utterance ids
     train_utts = dam.get_utt_list("train", lbl_loc=label_path)
+    print(f"train_utts: {len(train_utts)}")
     dev_utts = dam.get_utt_list("dev", lbl_loc=label_path)
+    print(f"dev_utts: {len(dev_utts)}")
     test_utts = dam.get_utt_list("test", lbl_loc=label_path)
-
+    print(f"test_utts: {len(test_utts)}")
+    
     # 取得音檔路徑
     train_wav_paths = dam.get_wav_path("train", wav_loc=audio_path, lbl_loc=label_path)
+    print(f"train_wav_paths: {train_wav_paths[0]}")
     dev_wav_paths = dam.get_wav_path("dev", wav_loc=audio_path, lbl_loc=label_path)
     test_wav_paths = dam.get_wav_path("test", wav_loc=audio_path, lbl_loc=label_path)
 
     # 取得情緒標籤
     train_labs = dam.get_msp_labels(train_utts, lab_type='categorical', lbl_loc=label_path)
+    print(f"train_labs: {list(train_labs[0])}")
     dev_labs = dam.get_msp_labels(dev_utts, lab_type='categorical', lbl_loc=label_path)
     test_labs = dam.get_msp_labels(test_utts, lab_type='categorical', lbl_loc=label_path)
 
@@ -231,6 +239,7 @@ def prepare_datasets(datarc, config_path):
     effective_num = 1.0 - torch.pow(beta, samples_per_cls)
     weights = (1.0 - beta) / effective_num
     class_balanced_weights = weights / torch.sum(weights) * no_of_classes
+    print(f"class_balanced_weights: {class_balanced_weights.shape}")
 
     # 載入或計算音檔平均/標準差
     train_wavs_np_path = os.path.join(

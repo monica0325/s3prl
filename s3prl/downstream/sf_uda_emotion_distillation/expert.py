@@ -19,8 +19,8 @@ from sklearn.metrics import classification_report
 from .dataset import prepare_datasets, collate_fn_padd
 from ..model import *
 
-from .specaug import SpecAug
-from .noise import AddNoise
+from ..specaug import SpecAug
+from ..noise import AddNoise
 
 warnings.filterwarnings("ignore")
 
@@ -29,7 +29,9 @@ def class_balanced_softmax_cross_entropy_with_softtarget(inputs, targets, weight
     """
     Retains the original class_balanced loss logic.
     """
+    print(f"weight bef: {weights.shape}")
     weights = (weights.unsqueeze(0).repeat(targets.size(0), 1) * targets).sum(dim=1, keepdim=True)
+    print(f"weights aft: {weights.shape} {weights}")
     log_probs = F.log_softmax(inputs.view(inputs.size(0), -1), dim=1)
     loss = -(weights * targets.view(targets.size(0), -1) * log_probs).sum(dim=1)
     if reduction == 'mean':
@@ -85,11 +87,11 @@ class DownstreamExpert(nn.Module):
          self.k_thresold,
          self.all_emotions) = prepare_datasets(
              self.datarc,
-             self.datarc['root'] + self.datarc['corpus'] + '/' + self.datarc['p_or_s'] + "/config.json"
+             self.datarc['root'] + self.datarc['corpus'] + '/' + self.datarc['p_or_s'] + '/' + self.datarc['src'] + "/config.json"
          )
 
         # Load config with label information
-        config_path = os.path.join(self.datarc['root'], self.datarc['corpus'], self.datarc['p_or_s'], "config.json")
+        config_path = os.path.join(self.datarc['root'], self.datarc['corpus'], self.datarc['p_or_s'], self.datarc['src'], "config.json")
         with open(config_path, 'r') as f:
             self.config = json.load(f)
 
@@ -197,11 +199,24 @@ class DownstreamExpert(nn.Module):
           mask: Boolean mask for samples above confidence threshold
         """
         with torch.no_grad():
-            features, _ = self.teacher_augmentation(features)
+            features, x_lengths = self.teacher_augmentation(features)
+            """
+            if x_lengths is None:
+                x_lengths = torch.LongTensor([x.size(0) for x in features])
+            batchsize, max_len, dim = len(x_lengths), torch.max(x_lengths).item(), features[0].size(1)
+
+            # Pad sequences to the same length
+            features_pad = features[0].new_zeros((batchsize, max_len, dim))
+            for i, x in enumerate(xs):
+                xs_pad[i, :x_lengths[i]] = x
+            """
+            features = pad_sequence(features, batch_first=True)
             features = self.projector(features)
             logits, _ = self.teacher_model(features, None)
             probabilities = torch.softmax(logits, dim=-1)
             confidence, pseudo_labels = probabilities.max(dim=-1)
+            #print(f"pseudo_labels: {pseudo_labels.shape}")
+            #print(f"confidence: {confidence.shape}")
 
         # Filter out low-confidence samples
         mask = confidence >= self.confidence_threshold
@@ -210,7 +225,7 @@ class DownstreamExpert(nn.Module):
     # ------------------------------------------------
     # Forward (Student + Distillation)
     # ------------------------------------------------
-    def forward(self, mode, features, labels, filenames, records, **kwargs):
+    def forward(self, mode, features, labels, filenames, records, addi_features, **kwargs):
         """
         Single forward pass. 
         Modified to incorporate:
@@ -220,9 +235,10 @@ class DownstreamExpert(nn.Module):
         """
         device = features[0].device
         features_len = torch.IntTensor([len(feat) for feat in features]).to(device=device)
-
+        # initial features: list of each sample(seq_len, dim) with its own feature length
         # Pad input to same length
         features = pad_sequence(features, batch_first=True)
+        #print(f"after pad_sequence: {features.shape}")
 
         # === Modified / New Lines: Distillation for 'train' mode only === #
         if mode == 'train':
@@ -232,17 +248,20 @@ class DownstreamExpert(nn.Module):
             with torch.no_grad():
                 # For unlabeled or target domain adaptation scenario:
                 # If you want to combine real labels + pseudo labels, adapt this logic.
-                pseudo_labels, mask, teacher_probs = self.generate_pseudo_labels(features)
+                pseudo_labels, mask, teacher_probs = self.generate_pseudo_labels(addi_features) #features)
 
             # -------------------------------------------------------
             #  2) Student model forward pass & Distillation Loss
             # -------------------------------------------------------
             # Optionally augment the student input differently from the teacher
             features_aug, _ = self.student_augmentation(features)
+            features_aug = pad_sequence(features_aug, batch_first=True)
+            
             features_aug = self.projector(features_aug)
 
             # Student predictions
             student_logits, _ = self.student_model(features_aug, features_len)
+            #print(f"logits shape: {student_logits.shape}")
 
             # We'll build "soft targets" from teacher_probs or "hard targets" from pseudo_labels
             # If you prefer soft targets:

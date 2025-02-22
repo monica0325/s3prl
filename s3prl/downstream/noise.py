@@ -63,4 +63,4 @@ class AddNoise(torch.nn.Module):
 
         # Restore individual sequences
         xs_noisy = [xs_pad[i, :xs[i].size(0)] for i in range(batchsize)]
-        return xs_noisy, x_lengths
+        return xs_noisy, x_lengths # list of augmented features

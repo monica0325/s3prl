@@ -11,7 +11,7 @@ from argparse import Namespace
 from torch.distributed import is_initialized, get_world_size
 
 from s3prl import hub
-from s3prl.downstream.runner import Runner
+from downstream.runner import Runner
 from s3prl.utility.helper import backup, get_time_tag, hack_isinstance, is_leader_process, override
 
 from huggingface_hub import HfApi, HfFolder

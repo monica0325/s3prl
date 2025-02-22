@@ -51,7 +51,7 @@ class UtteranceLevel(nn.Module):
     def forward(self, hidden_state, features_len=None):
         if self.pre_net is not None:
             hidden_state, features_len = self.pre_net(hidden_state, features_len)
-
+        #print(f"hidden_state utterancelevel: {hidden_state.shape} {features_len}")
         pooled, features_len = self.pooling(hidden_state, features_len)
         logit, features_len = self.post_net(pooled, features_len)
 
@@ -70,8 +70,9 @@ class MeanPooling(nn.Module):
             features_len  - [B] of feature length
         '''
         agg_vec_list = []
+        #print(f"feature_BxTxH:{feature_BxTxH.shape}")
         for i in range(len(feature_BxTxH)):
-            agg_vec = torch.mean(feature_BxTxH[i][:features_len[i]], dim=0)
+            agg_vec = torch.mean(feature_BxTxH[i], dim=0) #[:features_len[i]], dim=0)
             agg_vec_list.append(agg_vec)
 
         return torch.stack(agg_vec_list), torch.ones(len(feature_BxTxH)).long()

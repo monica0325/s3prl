@@ -92,10 +92,16 @@ class Runner():
 
         self.upstream = self._get_upstream()
         self.featurizer = self._get_featurizer()
+        if self.config.get('num_featurizer', None):
+            self.additional_featurizers = self._get_additional_featurizer()
+        else:
+            self.additional_featurizers = None
         self.downstream = self._get_downstream()
         self.all_entries = [self.upstream, self.featurizer, self.downstream]
-
-
+        if self.additional_featurizers:
+            self.all_entries += [self.additional_featurizers]
+        
+        
     def _load_weight(self, model, name):
         init_weight = self.init_ckpt.get(name)
         if init_weight:
@@ -180,8 +186,25 @@ class Runner():
         )
 
 
+    def _get_additional_featurizer(self):
+        model = Featurizer(
+            upstream = self.upstream.model,
+            feature_selection = self.args.upstream_feature_selection,
+            layer_selection = self.args.upstream_layer_selection,
+            upstream_device = self.args.device,
+            normalize = self.args.upstream_feature_normalize,
+        ).to(self.args.device)
+
+        return self._init_model(
+            model = model,
+            name = 'AdditionalFeaturizer',
+            trainable = True,
+            interfaces = ['output_dim', 'downsample_rate']
+        )
+        
+        
     def _get_downstream(self):
-        expert = importlib.import_module(f"s3prl.downstream.{self.args.downstream}.expert")
+        expert = importlib.import_module(f"downstream.{self.args.downstream}.expert")
         Downstream = getattr(expert, "DownstreamExpert")
 
         model = Downstream(
@@ -294,20 +317,32 @@ class Runner():
 
                     with torch.cuda.amp.autocast(enabled=amp):
                         if self.upstream.trainable:
-                            features = self.upstream.model(wavs)
+                            h_features = self.upstream.model(wavs)
                         else:
                             with torch.no_grad():
-                                features = self.upstream.model(wavs)
-                        features = self.featurizer.model(wavs, features)
+                                h_features = self.upstream.model(wavs)
+                        features = self.featurizer.model(wavs, h_features)
+                        
+                        if self.additional_featurizers:
+                            addi_features = self.additional_featurizers.model(wavs, h_features)
 
                         if specaug:
                             features, _ = specaug(features)
-
-                        loss = self.downstream.model(
-                            train_split,
-                            features, *others,
-                            records = records,
-                        )
+                            if self.additional_featurizers:
+                                addi_features, _ = specaug(addi_features)
+                        if self.additional_featurizers:
+                            loss = self.downstream.model(
+                                train_split,
+                                features, *others,
+                                records = records,
+                                addi_features = addi_features
+                            )
+                        else:
+                            loss = self.downstream.model(
+                                train_split,
+                                features, *others,
+                                records = records,
+                            )
                     batch_ids.append(batch_id)
 
                     gradient_accumulate_steps = self.config['runner'].get('gradient_accumulate_steps')
@@ -467,14 +502,25 @@ class Runner():
 
             wavs = [torch.FloatTensor(wav).to(self.args.device) for wav in wavs]
             with torch.no_grad():
-                features = self.upstream.model(wavs)
-                features = self.featurizer.model(wavs, features)
-                self.downstream.model(
-                    split,
-                    features, *others,
-                    records = records,
-                    batch_id = batch_id,
-                )
+                h_features = self.upstream.model(wavs)
+                features = self.featurizer.model(wavs, h_features)
+                
+                if self.additional_featurizers:
+                    addi_features = self.additional_featurizers.model(wavs, h_features)
+                    loss = self.downstream.model(
+                        split,
+                        features, *others,
+                        records = records,
+                        batch_id = batch_id,
+                        addi_features = addi_features
+                    )
+                else:
+                    self.downstream.model(
+                        split,
+                        features, *others,
+                        records = records,
+                        batch_id = batch_id,
+                    )
                 batch_ids.append(batch_id)
 
         save_names = self.downstream.model.log_records(
